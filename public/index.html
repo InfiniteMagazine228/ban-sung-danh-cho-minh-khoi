@@ -2,8 +2,7 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <title>Phaser & Node.js Multiplayer Shooter</title>
-    <!-- Nhúng thư viện đồ họa Phaser và kết nối mạng Socket.IO -->
+    <title>Phaser & Node.js on Vercel</title>
     <script src="https://jsdelivr.net"></script>
     <script src="/socket.io/socket.io.js"></script>
     <style>
@@ -11,56 +10,41 @@
     </style>
 </head>
 <body>
-
 <script>
 const config = {
     type: Phaser.AUTO,
-    width: 800,
-    height: 600,
-    physics: {
-        default: 'arcade',
-        arcade: { gravity: { y: 0 }, debug: false }
-    },
+    width: 800, height: 600,
+    physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
     scene: { preload: preload, create: create, update: update }
 };
 
 const game = new Phaser.Game(config);
-let socket;
-let bullets;
-let otherBullets;
+let socket, bullets, otherBullets;
 
-function preload() {
-    // Không cần tải ảnh bên ngoài, game sẽ tự vẽ hình tam giác và hình tròn trực tiếp
-}
+function preload() {}
 
 function create() {
     const self = this;
-    socket = io();
+    
+    // Tự động kết nối dựa vào domain hiện tại của trang Vercel
+    socket = io({
+        transports: ['websocket', 'polling']
+    });
     
     this.otherPlayers = this.physics.add.group();
     bullets = this.physics.add.group();
     otherBullets = this.physics.add.group();
-
-    // Khởi tạo các phím di chuyển (Mũi tên)
     this.cursors = this.input.keyboard.createCursorKeys();
 
-    // 1. Nhận danh sách người chơi khi vừa vào phòng
     socket.on('currentPlayers', (players) => {
         Object.keys(players).forEach((id) => {
-            if (id === socket.id) {
-                addPlayer(self, players[id]);
-            } else {
-                addOtherPlayers(self, players[id]);
-            }
+            if (id === socket.id) { addPlayer(self, players[id]); } 
+            else { addOtherPlayers(self, players[id]); }
         });
     });
 
-    // 2. Nhận thông báo có người chơi mới tham gia
-    socket.on('newPlayer', (playerInfo) => {
-        addOtherPlayers(self, playerInfo);
-    });
+    socket.on('newPlayer', (playerInfo) => { addOtherPlayers(self, playerInfo); });
 
-    // 3. Cập nhật vị trí và góc xoay của kẻ địch khi họ di chuyển
     socket.on('playerMoved', (playerInfo) => {
         self.otherPlayers.getChildren().forEach((otherPlayer) => {
             if (playerInfo.id === otherPlayer.id) {
@@ -70,7 +54,6 @@ function create() {
         });
     });
 
-    // 4. Nhận thông báo từ server khi kẻ địch bắn đạn
     socket.on('bulletSpawned', (bulletData) => {
         let b = self.add.circle(bulletData.x, bulletData.y, 4, 0xffff00);
         self.physics.add.existing(b);
@@ -78,25 +61,17 @@ function create() {
         otherBullets.add(b);
     });
 
-    // 5. Xóa nhân vật kẻ địch khi họ thoát game
     socket.on('playerDisconnected', (id) => {
-        self.otherPlayers.getChildren().forEach((otherPlayer) => {
-            if (id === otherPlayer.id) {
-                otherPlayer.destroy();
-            }
-        });
+        self.otherPlayers.getChildren().forEach((op) => { if (id === op.id) op.destroy(); });
     });
 
-    // Lắng nghe sự kiện CLICK CHUỘT TRÁI ĐỂ BẮN SÚNG
     this.input.on('pointerdown', (pointer) => {
         if (self.ship) {
-            // Tạo viên đạn trên màn hình của mình (Màu trắng)
             let b = self.add.circle(self.ship.x, self.ship.y, 4, 0xffffff);
             self.physics.add.existing(b);
             self.physics.velocityFromRotation(self.ship.rotation, 600, b.body.velocity);
             bullets.add(b);
 
-            // Gửi dữ liệu viên đạn lên server để đồng bộ cho người khác
             socket.emit('playerFired', {
                 x: self.ship.x,
                 y: self.ship.y,
@@ -109,46 +84,33 @@ function create() {
 function update() {
     if (this.ship) {
         let moved = false;
-
-        // Xử lý di chuyển bằng cụm phím mũi tên
         if (this.cursors.left.isDown) { this.ship.x -= 4; moved = true; }
         else if (this.cursors.right.isDown) { this.ship.x += 4; moved = true; }
-        
         if (this.cursors.up.isDown) { this.ship.y -= 4; moved = true; }
         else if (this.cursors.down.isDown) { this.ship.y += 4; moved = true; }
 
-        // Xử lý xoay đầu nhân vật theo con trỏ chuột
         let angle = Phaser.Math.Angle.Between(this.ship.x, this.ship.y, this.input.activePointer.x, this.input.activePointer.y);
         if (this.ship.rotation !== angle) {
             this.ship.setRotation(angle);
             moved = true; 
         }
 
-        // Nếu có bất kỳ sự thay đổi nào về vị trí hoặc góc nhìn thì gửi lên server
         if (moved) {
-            socket.emit('playerMovement', { 
-                x: this.ship.x, 
-                y: this.ship.y, 
-                rotation: this.ship.rotation 
-            });
+            socket.emit('playerMovement', { x: this.ship.x, y: this.ship.y, rotation: this.ship.rotation });
         }
     }
 }
 
-// Hàm khởi tạo nhân vật của bạn (Hình tam giác màu xanh lam)
 function addPlayer(scene, playerInfo) {
     scene.ship = scene.add.triangle(playerInfo.x, playerInfo.y, 0, 20, 20, 0, 20, 20, 0x0000ff);
     scene.physics.add.existing(scene.ship);
 }
 
-// Hàm khởi tạo nhân vật đối thủ (Hình tam giác màu đỏ)
 function addOtherPlayers(scene, playerInfo) {
-    const otherPlayer = scene.add.triangle(playerInfo.x, playerInfo.y, 0, 20, 20, 0, 20, 20, 0xff0000);
-    otherPlayer.id = playerInfo.id;
-    if (playerInfo.rotation) {
-        otherPlayer.setRotation(playerInfo.rotation);
-    }
-    scene.otherPlayers.add(otherPlayer);
+    const op = scene.add.triangle(playerInfo.x, playerInfo.y, 0, 20, 20, 0, 20, 20, 0xff0000);
+    op.id = playerInfo.id;
+    if (playerInfo.rotation) op.setRotation(playerInfo.rotation);
+    scene.otherPlayers.add(op);
 }
 </script>
 </body>
